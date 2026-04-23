@@ -1,0 +1,125 @@
+name: Deploy DefectRadar
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".gitignore"
+      - ".env.example"
+      - "DefectRadar/**"
+      - "publications/**"
+      - "scraps/**"
+      - "tailwind.config.js"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-defectradar
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  S3_BUCKET: defectradar-site-272594900302
+  EC2_INSTANCE_ID: i-06dd34ab975b4b3ac
+  NGINX_ROOT: /usr/share/nginx/html
+
+jobs:
+  deploy:
+    name: Sync to S3 + pull on EC2
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          # Either OIDC role (preferred) OR access keys — configure one via repo secrets.
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Stage site files
+        run: |
+          # Build a clean site directory with only the files we want to ship.
+          mkdir -p _site/research/culture
+          cp Radar.html _site/index.html
+          cp robots.txt _site/
+          cp sitemap.xml _site/
+          cp research/index.html _site/research/
+          cp research/culture/index.html _site/research/culture/
+          cp research/culture/credit-industries-tautology.html _site/research/culture/
+          ls -laR _site
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync _site/ s3://$S3_BUCKET/ \
+            --delete \
+            --cache-control "public, max-age=300" \
+            --exclude "*.md" \
+            --exclude ".git/*"
+
+      - name: Pull to EC2 via SSM
+        id: ssm
+        run: |
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids $EC2_INSTANCE_ID \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy DefectRadar from S3 ($GITHUB_SHA)" \
+            --parameters "commands=[\
+              \"set -e\",\
+              \"sudo aws s3 sync s3://$S3_BUCKET/ $NGINX_ROOT/ --delete --exclude 'icons/*' --exclude 'poweredby.png' --exclude '404.html' --exclude '50x.html'\",\
+              \"sudo chown -R nginx:nginx $NGINX_ROOT\",\
+              \"sudo chmod -R 644 $NGINX_ROOT\",\
+              \"sudo find $NGINX_ROOT -type d -exec chmod 755 {} \\\\;\",\
+              \"sudo nginx -t\",\
+              \"sudo systemctl reload nginx\",\
+              \"echo Deploy complete: commit $GITHUB_SHA\"\
+            ]" \
+            --query "Command.CommandId" --output text)
+          echo "cmd_id=$CMD_ID" >> $GITHUB_OUTPUT
+          echo "SSM command: $CMD_ID"
+
+      - name: Wait for SSM command
+        run: |
+          aws ssm wait command-executed \
+            --command-id ${{ steps.ssm.outputs.cmd_id }} \
+            --instance-id $EC2_INSTANCE_ID || true
+
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id ${{ steps.ssm.outputs.cmd_id }} \
+            --instance-id $EC2_INSTANCE_ID \
+            --query "Status" --output text)
+          STDOUT=$(aws ssm get-command-invocation \
+            --command-id ${{ steps.ssm.outputs.cmd_id }} \
+            --instance-id $EC2_INSTANCE_ID \
+            --query "StandardOutputContent" --output text)
+          STDERR=$(aws ssm get-command-invocation \
+            --command-id ${{ steps.ssm.outputs.cmd_id }} \
+            --instance-id $EC2_INSTANCE_ID \
+            --query "StandardErrorContent" --output text)
+          echo "Status: $STATUS"
+          echo "--- stdout ---"
+          echo "$STDOUT"
+          echo "--- stderr ---"
+          echo "$STDERR"
+          [ "$STATUS" = "Success" ]
+
+      - name: Verify robots.txt and article
+        run: |
+          echo "=== /robots.txt ==="
+          curl -fsS https://defectradar.legal.org.ua/robots.txt | head -5
+          echo ""
+          echo "=== /sitemap.xml ==="
+          curl -fsS https://defectradar.legal.org.ua/sitemap.xml | head -5
+          echo ""
+          echo "=== article HTTP 200 ==="
+          curl -fsS -o /dev/null -w "HTTP %{http_code}\n" \
+            https://defectradar.legal.org.ua/research/culture/credit-industries-tautology.html
