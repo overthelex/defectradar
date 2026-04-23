@@ -68,19 +68,28 @@ jobs:
       - name: Pull to EC2 via SSM
         id: ssm
         run: |
+          # Build command payload as JSON file (jq) to avoid shell-escaping hell.
+          jq -n \
+            --arg bucket "$S3_BUCKET" \
+            --arg root "$NGINX_ROOT" \
+            --arg sha "$GITHUB_SHA" \
+            '{
+              commands: [
+                "set -e",
+                "sudo aws s3 sync s3://\($bucket)/ \($root)/ --exclude icons/* --exclude poweredby.png --exclude 404.html --exclude 50x.html",
+                "sudo find \($root) -type f ! -name poweredby.png -exec chown nginx:nginx {} + 2>/dev/null || true",
+                "sudo find \($root) -type f ! -name poweredby.png -exec chmod 644 {} + 2>/dev/null || true",
+                "sudo find \($root) -type d -exec chmod 755 {} + 2>/dev/null || true",
+                "sudo nginx -t",
+                "sudo systemctl reload nginx",
+                "echo Deploy complete: \($sha)"
+              ]
+            }' > /tmp/ssm-params.json
           CMD_ID=$(aws ssm send-command \
-            --instance-ids $EC2_INSTANCE_ID \
+            --instance-ids "$EC2_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy DefectRadar from S3 ($GITHUB_SHA)" \
-            --parameters "commands=[\
-              \"sudo aws s3 sync s3://$S3_BUCKET/ $NGINX_ROOT/ --exclude 'icons/*' --exclude 'poweredby.png' --exclude '404.html' --exclude '50x.html' || exit 1\",\
-              \"sudo find $NGINX_ROOT -type f ! -name poweredby.png -exec chown nginx:nginx {} + 2>/dev/null || true\",\
-              \"sudo find $NGINX_ROOT -type f ! -name poweredby.png -exec chmod 644 {} + 2>/dev/null || true\",\
-              \"sudo find $NGINX_ROOT -type d -exec chmod 755 {} + 2>/dev/null || true\",\
-              \"sudo nginx -t || exit 1\",\
-              \"sudo systemctl reload nginx || exit 1\",\
-              \"echo Deploy complete: commit $GITHUB_SHA\"\
-            ]" \
+            --parameters file:///tmp/ssm-params.json \
             --query "Command.CommandId" --output text)
           echo "cmd_id=$CMD_ID" >> $GITHUB_OUTPUT
           echo "SSM command: $CMD_ID"
