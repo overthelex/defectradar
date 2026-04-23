@@ -61,7 +61,6 @@ jobs:
       - name: Sync to S3
         run: |
           aws s3 sync _site/ s3://$S3_BUCKET/ \
-            --delete \
             --cache-control "public, max-age=300" \
             --exclude "*.md" \
             --exclude ".git/*"
@@ -74,13 +73,12 @@ jobs:
             --document-name "AWS-RunShellScript" \
             --comment "Deploy DefectRadar from S3 ($GITHUB_SHA)" \
             --parameters "commands=[\
-              \"set -e\",\
-              \"sudo aws s3 sync s3://$S3_BUCKET/ $NGINX_ROOT/ --delete --exclude 'icons/*' --exclude 'poweredby.png' --exclude '404.html' --exclude '50x.html'\",\
-              \"sudo chown -R nginx:nginx $NGINX_ROOT\",\
-              \"sudo chmod -R 644 $NGINX_ROOT\",\
-              \"sudo find $NGINX_ROOT -type d -exec chmod 755 {} \\\\;\",\
-              \"sudo nginx -t\",\
-              \"sudo systemctl reload nginx\",\
+              \"sudo aws s3 sync s3://$S3_BUCKET/ $NGINX_ROOT/ --exclude 'icons/*' --exclude 'poweredby.png' --exclude '404.html' --exclude '50x.html' || exit 1\",\
+              \"sudo find $NGINX_ROOT -type f ! -name poweredby.png -exec chown nginx:nginx {} + 2>/dev/null || true\",\
+              \"sudo find $NGINX_ROOT -type f ! -name poweredby.png -exec chmod 644 {} + 2>/dev/null || true\",\
+              \"sudo find $NGINX_ROOT -type d -exec chmod 755 {} + 2>/dev/null || true\",\
+              \"sudo nginx -t || exit 1\",\
+              \"sudo systemctl reload nginx || exit 1\",\
               \"echo Deploy complete: commit $GITHUB_SHA\"\
             ]" \
             --query "Command.CommandId" --output text)
