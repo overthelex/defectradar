@@ -75,10 +75,9 @@ jobs:
             --arg sha "$GITHUB_SHA" \
             '{
               commands: [
-                "set -e",
-                "sudo aws s3 sync s3://\($bucket)/ \($root)/ --exclude icons/* --exclude poweredby.png --exclude 404.html --exclude 50x.html",
-                "sudo find \($root) -type f ! -name poweredby.png -exec chown nginx:nginx {} + 2>/dev/null || true",
-                "sudo find \($root) -type f ! -name poweredby.png -exec chmod 644 {} + 2>/dev/null || true",
+                "sudo aws s3 sync \"s3://\($bucket)/\" \"\($root)/\" --exclude \"icons/*\" --exclude \"404.html\" --exclude \"50x.html\" || true",
+                "sudo find \($root) -type f -exec chown nginx:nginx {} + 2>/dev/null || true",
+                "sudo find \($root) -type f -exec chmod 644 {} + 2>/dev/null || true",
                 "sudo find \($root) -type d -exec chmod 755 {} + 2>/dev/null || true",
                 "sudo nginx -t",
                 "sudo systemctl reload nginx",
