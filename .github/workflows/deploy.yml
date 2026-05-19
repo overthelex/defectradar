@@ -73,6 +73,7 @@ jobs:
             '{
               commands: [
                 "aws s3 sync \"s3://\($bucket)/\" \"\($dir)/\"",
+                "chown -R ubuntu:ubuntu \"\($dir)\"",
                 "echo Deploy complete: \($sha)"
               ]
             }' > /tmp/ssm-params.json
