@@ -20,12 +20,12 @@ concurrency:
 env:
   AWS_REGION: eu-central-1
   S3_BUCKET: defectradar-site-272594900302
-  EC2_INSTANCE_ID: i-06dd34ab975b4b3ac
-  NGINX_ROOT: /usr/share/nginx/html
+  EC2_INSTANCE_ID: i-04e39a795576e33f0
+  SITE_DIR: /home/ubuntu/SecondLayer/deployment/static/defectradar
 
 jobs:
   deploy:
-    name: Sync to S3 + pull on EC2
+    name: Sync to S3 + pull on secondlayer-prod
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -41,14 +41,12 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          # Either OIDC role (preferred) OR access keys — configure one via repo secrets.
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Stage site files
         run: |
-          # Build a clean site directory with only the files we want to ship.
           mkdir -p _site/research/culture
           cp Radar.html _site/index.html
           cp robots.txt _site/
@@ -65,22 +63,16 @@ jobs:
             --exclude "*.md" \
             --exclude ".git/*"
 
-      - name: Pull to EC2 via SSM
+      - name: Pull to secondlayer-prod via SSM
         id: ssm
         run: |
-          # Build command payload as JSON file (jq) to avoid shell-escaping hell.
           jq -n \
             --arg bucket "$S3_BUCKET" \
-            --arg root "$NGINX_ROOT" \
+            --arg dir "$SITE_DIR" \
             --arg sha "$GITHUB_SHA" \
             '{
               commands: [
-                "sudo aws s3 sync \"s3://\($bucket)/\" \"\($root)/\" --exclude \"icons/*\" --exclude \"404.html\" --exclude \"50x.html\" || true",
-                "sudo find \($root) -type f -exec chown nginx:nginx {} + 2>/dev/null || true",
-                "sudo find \($root) -type f -exec chmod 644 {} + 2>/dev/null || true",
-                "sudo find \($root) -type d -exec chmod 755 {} + 2>/dev/null || true",
-                "sudo nginx -t",
-                "sudo systemctl reload nginx",
+                "aws s3 sync \"s3://\($bucket)/\" \"\($dir)/\"",
                 "echo Deploy complete: \($sha)"
               ]
             }' > /tmp/ssm-params.json
@@ -118,7 +110,7 @@ jobs:
           echo "$STDERR"
           [ "$STATUS" = "Success" ]
 
-      - name: Verify robots.txt and article
+      - name: Verify site
         run: |
           echo "=== /robots.txt ==="
           curl -fsS https://defectradar.legal.org.ua/robots.txt | head -5
